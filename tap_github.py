@@ -6,6 +6,7 @@ import singer
 import singer.bookmarks as bookmarks
 import singer.metrics as metrics
 import collections
+from tenacity import retry, wait_fixed, retry_if_exception_type
 
 from singer import metadata
 
@@ -39,6 +40,9 @@ KEY_PROPERTIES = {
     'team_members': ['id'],
     'team_memberships': ['url']
 }
+
+class RateLimitException(Exception):
+    pass
 
 class AuthException(Exception):
     pass
@@ -95,6 +99,8 @@ def get_bookmark(state, repo, stream_name, bookmark_key):
         return repo_stream_dict.get(bookmark_key)
     return None
 
+@retry(wait=wait_fixed(3660),
+       retry=retry_if_exception_type(RateLimitException))
 def authed_get(source, url, headers={}):
     with metrics.http_request_timer(source) as timer:
         session.headers.update(headers)
@@ -102,6 +108,8 @@ def authed_get(source, url, headers={}):
         if resp.status_code == 401:
             raise AuthException(resp.text)
         if resp.status_code == 403:
+            if "API rate limit exceeded" in resp.text:
+                raise RateLimitException(resp.text)
             raise AuthException(resp.text)
         if resp.status_code == 404:
             raise NotFoundException(resp.text)
